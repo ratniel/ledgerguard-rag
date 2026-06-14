@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import gradio as gr
@@ -80,4 +81,5 @@ with gr.Blocks(title="LedgerGuard RAG") as demo:
 
 if __name__ == "__main__":
     settings = get_settings()
-    demo.launch(server_name=settings.gradio_host, server_port=settings.gradio_port)
+    server_name = "0.0.0.0" if os.getenv("SPACE_ID") else settings.gradio_host
+    demo.launch(server_name=server_name, server_port=settings.gradio_port)
