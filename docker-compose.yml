@@ -1,0 +1,14 @@
+services:
+  vola-finance-phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: vola-finance-phoenix
+    ports:
+      - "16006:6006"
+      - "14317:4317"
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+    volumes:
+      - vola-finance-phoenix-data:/mnt/data
+
+volumes:
+  vola-finance-phoenix-data:
