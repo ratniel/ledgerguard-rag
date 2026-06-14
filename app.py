@@ -46,8 +46,8 @@ def respond(message: str, history: list[dict[str, str]], user_id: str):
     return history, gallery, result.model_dump(mode="json")
 
 
-with gr.Blocks(title="Vola Finance Transaction RAG") as demo:
-    gr.Markdown("# Vola Finance Transaction RAG")
+with gr.Blocks(title="LedgerGuard RAG") as demo:
+    gr.Markdown("# LedgerGuard RAG")
     with gr.Row():
         user_id = gr.Dropdown(
             choices=pipeline.repository.user_ids,

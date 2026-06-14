@@ -2,10 +2,6 @@
 
 Privacy-preserving tabular RAG for personal finance transactions. LedgerGuard RAG answers spending, income, savings, category, and trend questions from a user-scoped Pandas DataFrame, generates grounded visualizations, and protects against cross-user leakage, prompt injection, ungrounded outputs, LLM outages, timeouts, and token-budget pressure.
 
-Recommended repository name: `ledgerguard-rag`
-
-Current Python package/project name: `vola-finance-assignment`
-
 ## What This Project Does
 
 LedgerGuard RAG is a DataFrame-first financial assistant. It uses an LLM for planning and response polish when available, but all financial numbers come from deterministic Pandas computations over the authenticated user's own transaction rows.
@@ -310,7 +306,7 @@ The test suite covers the core product risks:
 - LLM timeout fallback
 - Circuit breaker fallback
 - Token budget compaction
-- PDF assessment scenarios
+- Provided assessment scenarios
 - Custom JSONL edge-case datasets
 
 The JSONL evaluation files live in `evals/`, and `tests/test_edge_case_eval_dataset.py` runs them as parameterized tests.
@@ -424,15 +420,3 @@ For production, replace the sample CSV with an authenticated per-user data acces
 - Add new edge cases to `evals/custom_edge_cases.jsonl`.
 - Prefer adding tests for new guardrail, follow-up, or data-scope behavior.
 - Do not commit `.env`, cache files, audit logs, generated charts, or local virtual environments.
-
-## Suggested Project Name
-
-The recommended project name is **LedgerGuard RAG**.
-
-Why this name works:
-
-- "Ledger" signals transaction and money analysis.
-- "Guard" signals privacy, grounding, and leakage prevention.
-- "RAG" signals the architecture without over-branding the product.
-
-Suggested repository slug: `ledgerguard-rag`.

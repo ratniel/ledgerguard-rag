@@ -105,7 +105,7 @@ class LLMClient:
                     },
                     extra_headers={
                         "HTTP-Referer": "http://localhost",
-                        "X-Title": "Vola Finance Assignment",
+                        "X-Title": "LedgerGuard RAG",
                     },
                 )
                 content = completion.choices[0].message.content or "{}"
@@ -143,7 +143,7 @@ class LLMClient:
                     max_tokens=self.settings.llm_max_output_tokens,
                     extra_headers={
                         "HTTP-Referer": "http://localhost",
-                        "X-Title": "Vola Finance Assignment",
+                        "X-Title": "LedgerGuard RAG",
                     },
                 )
                 self._failures = 0

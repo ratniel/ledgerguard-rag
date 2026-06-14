@@ -1,14 +1,14 @@
 services:
-  vola-finance-phoenix:
+  ledgerguard-phoenix:
     image: arizephoenix/phoenix:latest
-    container_name: vola-finance-phoenix
+    container_name: ledgerguard-phoenix
     ports:
       - "16006:6006"
       - "14317:4317"
     environment:
       PHOENIX_WORKING_DIR: /mnt/data
     volumes:
-      - vola-finance-phoenix-data:/mnt/data
+      - ledgerguard-phoenix-data:/mnt/data
 
 volumes:
-  vola-finance-phoenix-data:
+  ledgerguard-phoenix-data:

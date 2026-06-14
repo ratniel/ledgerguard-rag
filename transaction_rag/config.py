@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     audit_log_path: Path = Path("audit/audit.jsonl")
 
     tracing_enabled: bool = True
-    phoenix_project_name: str = "vola-finance-assignment"
+    phoenix_project_name: str = "ledgerguard-rag"
     phoenix_collector_endpoint: str = "http://localhost:16006/v1/traces"
 
     gradio_host: str = "127.0.0.1"
