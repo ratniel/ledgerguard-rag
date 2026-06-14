@@ -16,7 +16,7 @@ The app can answer questions such as:
 
 ## UI Preview
 
-![LedgerGuard RAG UI showing a spending trend answer and generated chart](docs/ledgerguard_ui.png)
+![LedgerGuard RAG UI showing a spending trend answer and generated chart](docs/ledgerguard_ui.jpg)
 
 It is designed around four production concerns:
 
