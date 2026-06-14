@@ -2,6 +2,8 @@
 
 Privacy-preserving tabular RAG for personal finance transactions. LedgerGuard RAG answers spending, income, savings, category, and trend questions from a user-scoped Pandas DataFrame, generates grounded visualizations, and protects against cross-user leakage, prompt injection, ungrounded outputs, LLM outages, timeouts, and token-budget pressure.
 
+Live demo: [Hugging Face Spaces](https://huggingface.co/spaces/0bzrv3/ledgerguard-rag)
+
 ## What This Project Does
 
 LedgerGuard RAG is a DataFrame-first financial assistant. It uses an LLM for planning and response polish when available, but all financial numbers come from deterministic Pandas computations over the authenticated user's own transaction rows.

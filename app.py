@@ -82,4 +82,8 @@ with gr.Blocks(title="LedgerGuard RAG") as demo:
 if __name__ == "__main__":
     settings = get_settings()
     server_name = "0.0.0.0" if os.getenv("SPACE_ID") else settings.gradio_host
-    demo.launch(server_name=server_name, server_port=settings.gradio_port)
+    demo.launch(
+        server_name=server_name,
+        server_port=settings.gradio_port,
+        allowed_paths=[str(settings.outputs_dir.resolve())],
+    )
