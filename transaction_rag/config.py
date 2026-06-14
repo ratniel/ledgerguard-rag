@@ -51,9 +51,12 @@ class Settings(BaseSettings):
         validation_alias="OPENROUTER_RESPONSE_MODELS",
     )
     enable_llm: bool = True
+    prefer_heuristic_planner: bool = True
+    enable_response_llm: bool = False
     llm_temperature: float = 0.1
     llm_max_output_tokens: int = 900
-    request_timeout_seconds: float = 12.0
+    request_timeout_seconds: float = 6.0
+    llm_model_attempt_limit: int = 2
     circuit_breaker_threshold: int = 3
 
     max_prompt_chars: int = 1200

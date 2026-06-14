@@ -1341,7 +1341,6 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "seaborn" },
     { name = "sqlalchemy" },
-    { name = "tenacity" },
     { name = "tiktoken" },
 ]
 
@@ -1365,7 +1364,6 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "sqlalchemy", specifier = ">=2.0.50" },
-    { name = "tenacity", specifier = ">=9.1.4" },
     { name = "tiktoken", specifier = ">=0.13.0" },
 ]
 

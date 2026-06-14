@@ -245,51 +245,54 @@ class TransactionRAGWorkflow(Workflow):
             if ev.planner_override is not None:
                 planner = ev.planner_override
             else:
-                messages = self.context_manager.build_planner_messages(
-                    user_id=ev.user_id,
-                    sanitized_prompt=ev.sanitized_prompt,
-                    profile=ev.profile,
-                    tool_schemas=self.toolkit.tool_schemas(),
-                )
-                if self.llm.estimate_tokens(messages) + self.settings.llm_max_output_tokens > self.settings.token_budget:
-                    flags.append(GuardrailFlag.TOKEN_BUDGET_EXCEEDED)
-                    self.context_manager.maybe_summarize_history(
-                        ev.user_id,
-                        token_budget=self.settings.token_budget,
-                        max_output_tokens=self.settings.llm_max_output_tokens,
-                    )
-                try:
-                    planner, usage = self.llm.plan(messages)
-                except CircuitOpenError:
-                    planner = self.llm.heuristic_plan(ev.sanitized_prompt)
-                    flags.append(GuardrailFlag.CIRCUIT_OPEN)
-                except LLMTimeoutError:
-                    planner = self.llm.heuristic_plan(ev.sanitized_prompt)
-                    flags.append(GuardrailFlag.TIMEOUT)
-                except MalformedLLMOutputError:
-                    planner = self.llm.heuristic_plan(ev.sanitized_prompt)
-                    flags.append(GuardrailFlag.MALFORMED_LLM_OUTPUT)
-                except LLMUnavailableError:
-                    planner = self.llm.heuristic_plan(ev.sanitized_prompt)
-                    flags.append(GuardrailFlag.LLM_UNAVAILABLE)
-                except Exception:
-                    planner = self.llm.heuristic_plan(ev.sanitized_prompt)
-                    flags.append(GuardrailFlag.LLM_UNAVAILABLE)
-                if planner.guardrail_triggered:
-                    flags.extend(planner.guardrail_flags)
                 heuristic_planner = self.llm.heuristic_plan(ev.sanitized_prompt)
-                if not planner.tool_calls and heuristic_planner.tool_calls:
-                    planner.tool_calls = heuristic_planner.tool_calls
-                    if not planner.user_intent:
-                        planner.user_intent = heuristic_planner.user_intent
-                    if not planner.data_focus:
-                        planner.data_focus = heuristic_planner.data_focus
-                    planner.response_plan = (
-                        planner.response_plan
-                        or "Use deterministic Pandas summaries and generated tool outputs. Avoid unsupported claims."
-                    )
+                if self.settings.prefer_heuristic_planner and heuristic_planner.tool_calls:
+                    planner = heuristic_planner
                 else:
-                    _apply_heuristic_tool_constraints(planner, heuristic_planner, ev.sanitized_prompt)
+                    messages = self.context_manager.build_planner_messages(
+                        user_id=ev.user_id,
+                        sanitized_prompt=ev.sanitized_prompt,
+                        profile=ev.profile,
+                        tool_schemas=self.toolkit.tool_schemas(),
+                    )
+                    if self.llm.estimate_tokens(messages) + self.settings.llm_max_output_tokens > self.settings.token_budget:
+                        flags.append(GuardrailFlag.TOKEN_BUDGET_EXCEEDED)
+                        self.context_manager.maybe_summarize_history(
+                            ev.user_id,
+                            token_budget=self.settings.token_budget,
+                            max_output_tokens=self.settings.llm_max_output_tokens,
+                        )
+                    try:
+                        planner, usage = self.llm.plan(messages)
+                    except CircuitOpenError:
+                        planner = heuristic_planner
+                        flags.append(GuardrailFlag.CIRCUIT_OPEN)
+                    except LLMTimeoutError:
+                        planner = heuristic_planner
+                        flags.append(GuardrailFlag.TIMEOUT)
+                    except MalformedLLMOutputError:
+                        planner = heuristic_planner
+                        flags.append(GuardrailFlag.MALFORMED_LLM_OUTPUT)
+                    except LLMUnavailableError:
+                        planner = heuristic_planner
+                        flags.append(GuardrailFlag.LLM_UNAVAILABLE)
+                    except Exception:
+                        planner = heuristic_planner
+                        flags.append(GuardrailFlag.LLM_UNAVAILABLE)
+                    if planner.guardrail_triggered:
+                        flags.extend(planner.guardrail_flags)
+                    if not planner.tool_calls and heuristic_planner.tool_calls:
+                        planner.tool_calls = heuristic_planner.tool_calls
+                        if not planner.user_intent:
+                            planner.user_intent = heuristic_planner.user_intent
+                        if not planner.data_focus:
+                            planner.data_focus = heuristic_planner.data_focus
+                        planner.response_plan = (
+                            planner.response_plan
+                            or "Use deterministic Pandas summaries and generated tool outputs. Avoid unsupported claims."
+                        )
+                    else:
+                        _apply_heuristic_tool_constraints(planner, heuristic_planner, ev.sanitized_prompt)
             return PlannedEvent(
                 user_id=ev.user_id,
                 prompt=ev.prompt,
@@ -333,26 +336,27 @@ class TransactionRAGWorkflow(Workflow):
         with self.observability.span("final_response", **{"user.id": ev.user_id}):
             if ev.tool_results:
                 response = deterministic_response(ev.prompt, ev.tool_results, ev.profile, ev.resolution)
-                try:
-                    messages = self.context_manager.build_response_messages(
-                        sanitized_prompt=ev.sanitized_prompt,
-                        profile=ev.profile,
-                        tool_results=ev.tool_results,
-                        planner_summary=ev.planner.response_plan,
-                    )
-                    llm_response, response_usage = self.llm.compose_response(messages)
-                    candidate_response = llm_response.strip()
-                    if _is_useful_llm_response(candidate_response):
-                        response = candidate_response
-                    ev.usage.update({f"response_{k}": v for k, v in response_usage.items()})
-                except CircuitOpenError:
-                    flags.append(GuardrailFlag.CIRCUIT_OPEN)
-                except LLMTimeoutError:
-                    flags.append(GuardrailFlag.TIMEOUT)
-                except LLMUnavailableError:
-                    flags.append(GuardrailFlag.LLM_UNAVAILABLE)
-                except Exception:
-                    flags.append(GuardrailFlag.LLM_UNAVAILABLE)
+                if self.settings.enable_response_llm and not _has_llm_operational_flag(flags):
+                    try:
+                        messages = self.context_manager.build_response_messages(
+                            sanitized_prompt=ev.sanitized_prompt,
+                            profile=ev.profile,
+                            tool_results=ev.tool_results,
+                            planner_summary=ev.planner.response_plan,
+                        )
+                        llm_response, response_usage = self.llm.compose_response(messages)
+                        candidate_response = llm_response.strip()
+                        if _is_useful_llm_response(candidate_response):
+                            response = candidate_response
+                        ev.usage.update({f"response_{k}": v for k, v in response_usage.items()})
+                    except CircuitOpenError:
+                        flags.append(GuardrailFlag.CIRCUIT_OPEN)
+                    except LLMTimeoutError:
+                        flags.append(GuardrailFlag.TIMEOUT)
+                    except LLMUnavailableError:
+                        flags.append(GuardrailFlag.LLM_UNAVAILABLE)
+                    except Exception:
+                        flags.append(GuardrailFlag.LLM_UNAVAILABLE)
             else:
                 response = deterministic_response(ev.prompt, ev.tool_results, ev.profile, ev.resolution)
             return ResponseReadyEvent(
@@ -811,3 +815,16 @@ def _is_useful_llm_response(response: str) -> bool:
         return False
     financial_terms = ["$", "spend", "spent", "income", "expense", "saving", "category", "month"]
     return any(term in lowered for term in financial_terms)
+
+
+def _has_llm_operational_flag(flags: list[GuardrailFlag]) -> bool:
+    return any(
+        flag
+        in {
+            GuardrailFlag.CIRCUIT_OPEN,
+            GuardrailFlag.LLM_UNAVAILABLE,
+            GuardrailFlag.MALFORMED_LLM_OUTPUT,
+            GuardrailFlag.TIMEOUT,
+        }
+        for flag in flags
+    )

@@ -14,6 +14,10 @@ The app can answer questions such as:
 - "Can you go further back?"
 - "What about the last 6 months?"
 
+## UI Preview
+
+![LedgerGuard RAG UI showing a spending trend answer and generated chart](docs/ledgerguard_ui.png)
+
 It is designed around four production concerns:
 
 - User isolation: every computation is filtered by the selected/authenticated `user_id`.
@@ -206,6 +210,8 @@ The LLM has two roles:
 - Planner: returns strict JSON matching `PlannerOutput`.
 - Response composer: optionally rewrites the deterministic answer into a concise user-facing response.
 
+By default, common financial intents use the local heuristic planner first. This keeps the UI responsive for known transaction-analysis workflows while still allowing the LLM planner to handle ambiguous prompts when the heuristic cannot confidently choose a tool. The response-composer LLM is disabled by default because the deterministic response is already grounded in the computed Pandas summaries.
+
 If the LLM is unavailable, malformed, times out, or the circuit is open, the system falls back to `LLMClient.heuristic_plan()` and deterministic response generation. This means the app remains useful without an LLM key.
 
 ### 8. Timeouts and circuit breaker behavior
@@ -215,14 +221,16 @@ Production resilience is handled in `transaction_rag/llm.py` and `transaction_ra
 Configured controls:
 
 - `request_timeout_seconds`: timeout for OpenRouter calls.
+- `llm_model_attempt_limit`: maximum OpenRouter models to try per planner/response phase.
 - `circuit_breaker_threshold`: number of failures before the circuit opens.
-- Tenacity retries for retryable LLM errors.
 - Separate exception types for timeout, circuit-open, malformed output, and LLM-unavailable paths.
 
 Workflow behavior:
 
 - Planner timeout -> use heuristic planner and add `timeout`.
 - Planner circuit open -> use heuristic planner and add `circuit_open`.
+- Planner fallback -> skip the optional response-composer LLM and return the deterministic answer immediately.
+- Known financial prompt -> use the fast local planner before calling remote LLMs.
 - Response timeout/circuit open -> keep deterministic answer and add the operational flag.
 - Malformed planner JSON -> use heuristic planner and add `malformed_llm_output`.
 - LLM disabled or missing key -> use deterministic fallback and add `llm_unavailable`.
@@ -377,10 +385,13 @@ Settings are defined in `transaction_rag/config.py` and can be set through envir
 | --- | --- | --- |
 | `OPENROUTER_API_KEY` | unset | Enables OpenRouter LLM calls |
 | `ENABLE_LLM` | `true` | Turns LLM planner/composer on or off |
+| `prefer_heuristic_planner` | `true` | Uses the local deterministic planner first for known financial intents |
+| `enable_response_llm` | `false` | Enables optional LLM response polishing after tool execution |
 | `OPENROUTER_PLANNER_MODELS` | configured free-model list | Planner model fallback order |
 | `OPENROUTER_RESPONSE_MODELS` | configured free-model list | Response model fallback order |
 | `llm_max_output_tokens` | `900` | Maximum LLM output tokens |
-| `request_timeout_seconds` | `12.0` | OpenRouter request timeout |
+| `request_timeout_seconds` | `6.0` | OpenRouter request timeout |
+| `llm_model_attempt_limit` | `2` | Maximum OpenRouter models tried per planner/response phase |
 | `circuit_breaker_threshold` | `3` | Failure count before circuit opens |
 | `max_prompt_chars` | `1200` | Input prompt truncation limit |
 | `token_budget` | `8000` | Planner context token budget |

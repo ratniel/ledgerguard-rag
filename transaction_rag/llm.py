@@ -7,15 +7,10 @@ from typing import Any
 import tiktoken
 from openai import OpenAI
 from pydantic import ValidationError
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from .config import Settings
 from .errors import CircuitOpenError, LLMTimeoutError, LLMUnavailableError, MalformedLLMOutputError
 from .models import GuardrailFlag, PlannerOutput, ToolCall, ToolName
-
-
-def _is_retryable_llm_error(error: BaseException) -> bool:
-    return isinstance(error, LLMUnavailableError | MalformedLLMOutputError) and not isinstance(error, CircuitOpenError)
 
 
 class LLMClient:
@@ -23,13 +18,19 @@ class LLMClient:
         self.settings = settings
         self._failures = 0
         self._client: OpenAI | None = None
-        self.planner_models = _dedupe_models(_split_models(settings.openrouter_planner_models))
-        self.response_models = _dedupe_models(
-            [
-                *_split_models(settings.openrouter_response_models),
-                settings.openrouter_primary_model,
-                settings.openrouter_fallback_model,
-            ]
+        self.planner_models = _limit_models(
+            _dedupe_models(_split_models(settings.openrouter_planner_models)),
+            settings.llm_model_attempt_limit,
+        )
+        self.response_models = _limit_models(
+            _dedupe_models(
+                [
+                    *_split_models(settings.openrouter_response_models),
+                    settings.openrouter_primary_model,
+                    settings.openrouter_fallback_model,
+                ]
+            ),
+            settings.llm_model_attempt_limit,
         )
         if settings.enable_llm and settings.openrouter_api_key:
             self._client = OpenAI(
@@ -79,12 +80,6 @@ class LLMClient:
         except Exception:
             return self._deterministic_summary(history_text)
 
-    @retry(
-        retry=retry_if_exception(_is_retryable_llm_error),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-        stop=stop_after_attempt(2),
-        reraise=True,
-    )
     def _run_planner(self, messages: list[dict[str, str]]) -> tuple[PlannerOutput, dict[str, int]]:
         assert self._client is not None
         errors: list[Exception] = []
@@ -125,12 +120,6 @@ class LLMClient:
             raise MalformedLLMOutputError(_format_model_errors(errors))
         raise LLMUnavailableError(_format_model_errors(errors))
 
-    @retry(
-        retry=retry_if_exception(_is_retryable_llm_error),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-        stop=stop_after_attempt(2),
-        reraise=True,
-    )
     def _run_text_completion(self, messages: list[dict[str, str]]) -> tuple[str, dict[str, int]]:
         assert self._client is not None
         errors: list[Exception] = []
@@ -162,6 +151,7 @@ class LLMClient:
         lowered = prompt.lower()
         tool_calls: list[ToolCall] = []
         intent = "general_financial_analysis"
+        requested_months = _requested_month_count(lowered)
         if any(term in lowered for term in ["full report", "financial report", "full financial report", "financially", "how am i doing"]):
             intent = "full_financial_report"
             tool_calls = [
@@ -171,7 +161,7 @@ class LLMClient:
             ]
         elif any(term in lowered for term in ["saving", "savings", "bleeding", "income vs", "income versus"]):
             intent = "savings_assessment"
-            arguments: dict[str, Any] = {"months": 6}
+            arguments: dict[str, Any] = {"months": requested_months or 6}
             if any(term in lowered for term in ["last month", "previous month", "prior month"]):
                 arguments = {"months": 1, "period": "last_month"}
             elif any(term in lowered for term in ["this month", "current month"]):
@@ -179,17 +169,35 @@ class LLMClient:
             tool_calls = [ToolCall(name=ToolName.INCOME_VS_EXPENSE, arguments=arguments, rationale="Compare income, expenses, and net savings.")]
         elif any(term in lowered for term in ["trend", "changed over time", "over time"]):
             intent = "spending_trend"
-            tool_calls = [ToolCall(name=ToolName.MONTHLY_SPENDING_TREND, arguments={"months": 6}, rationale="Show monthly spending trend.")]
+            tool_calls = [
+                ToolCall(
+                    name=ToolName.MONTHLY_SPENDING_TREND,
+                    arguments={"months": requested_months or 6},
+                    rationale="Show monthly spending trend.",
+                )
+            ]
         elif any(term in lowered for term in ["most", "where", "category", "breakdown", "money going", "spent the most"]):
             intent = "category_breakdown"
-            period = "last_month" if "last month" in lowered else "last_3_months"
+            if "last month" in lowered:
+                period = "last_month"
+            elif requested_months:
+                period = f"last_{requested_months}_months"
+            else:
+                period = "last_3_months"
             tool_calls = [ToolCall(name=ToolName.CATEGORY_BREAKDOWN, arguments={"period": period, "top_n": 7}, rationale="Identify top spending categories.")]
         elif "food" in lowered:
             intent = "food_spending"
-            tool_calls = [ToolCall(name=ToolName.MONTHLY_SPENDING_TREND, arguments={"months": 6, "category_filter": "food"}, rationale="Show food spending over time.")]
+            tool_calls = [
+                ToolCall(
+                    name=ToolName.MONTHLY_SPENDING_TREND,
+                    arguments={"months": requested_months or 6, "category_filter": "food"},
+                    rationale="Show food spending over time.",
+                )
+            ]
         elif any(term in lowered for term in ["spend", "expense", "expenses", "month"]):
             intent = "spending_summary"
-            tool_calls = [ToolCall(name=ToolName.CATEGORY_BREAKDOWN, arguments={"period": "last_3_months", "top_n": 7}, rationale="Summarize recent spending categories.")]
+            period = f"last_{requested_months}_months" if requested_months else "last_3_months"
+            tool_calls = [ToolCall(name=ToolName.CATEGORY_BREAKDOWN, arguments={"period": period, "top_n": 7}, rationale="Summarize recent spending categories.")]
         return PlannerOutput(
             user_intent=intent,
             data_focus="Filtered user DataFrame only.",
@@ -232,6 +240,38 @@ def _dedupe_models(models: list[str]) -> list[str]:
             seen.add(model)
             unique.append(model)
     return unique
+
+
+def _limit_models(models: list[str], limit: int) -> list[str]:
+    if limit <= 0:
+        return models
+    return models[:limit]
+
+
+def _requested_month_count(lowered: str) -> int | None:
+    number = r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+    match = re.search(rf"(?:last|past|recent|latest)\s+{number}\s+months?", lowered)
+    if not match:
+        return None
+    return max(1, min(24, _number_text_to_int(match.group(1))))
+
+
+def _number_text_to_int(value: str) -> int:
+    words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+    }
+    return words.get(value, int(value) if value.isdigit() else 1)
 
 
 def _format_model_errors(errors: list[Exception]) -> str:

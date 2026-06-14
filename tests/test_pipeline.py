@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from transaction_rag.errors import CircuitOpenError, LLMTimeoutError
+from transaction_rag.errors import CircuitOpenError, LLMTimeoutError, LLMUnavailableError
 from transaction_rag.guardrails import OutputGuardrails
 from transaction_rag.config import Settings
 from transaction_rag.llm import LLMClient
@@ -54,6 +54,24 @@ class CircuitOpenLLM(TimeoutLLM):
         raise CircuitOpenError("circuit is open")
 
 
+class CountingTimeoutLLM(TimeoutLLM):
+    def __init__(self):
+        self.compose_calls = 0
+
+    def compose_response(self, messages):
+        self.compose_calls += 1
+        raise LLMTimeoutError("response timed out")
+
+
+class CountingPlanLLM(TimeoutLLM):
+    def __init__(self):
+        self.plan_calls = 0
+
+    def plan(self, messages):
+        self.plan_calls += 1
+        raise LLMTimeoutError("planner timed out")
+
+
 class FailingOpenRouterClient:
     def __init__(self):
         self.calls = 0
@@ -89,6 +107,17 @@ def test_spending_trend_query_generates_chart(tmp_path: Path):
     assert result.error is None
     assert result.visualizations
     assert result.data_summary["tools"][0]["name"] == "plot_monthly_spending_trend"
+
+
+def test_spending_trend_honors_explicit_three_month_window(tmp_path: Path):
+    pipeline = make_pipeline(tmp_path)
+    result = pipeline.run("usr_a1b2c3d4", "Show me my spending trend for the last three months")
+    tool = result.data_summary["tools"][0]
+
+    assert result.error is None
+    assert tool["name"] == "plot_monthly_spending_trend"
+    assert tool["parameters"]["months"] == 3
+    assert tool["data_summary"]["window"] == "2025-10 to 2025-12"
 
 
 def test_savings_query_generates_income_expense_chart(tmp_path: Path):
@@ -362,6 +391,7 @@ def test_token_budget_exceeded_summarizes_history(tmp_path: Path):
 
 def test_llm_timeout_falls_back_to_dataframe_summary(tmp_path: Path):
     pipeline = make_pipeline(tmp_path)
+    pipeline.settings.prefer_heuristic_planner = False
     attach_fake_llm(pipeline, TimeoutLLM())
 
     result = pipeline.run("usr_a1b2c3d4", "What did I spend the most on last month?")
@@ -374,8 +404,39 @@ def test_llm_timeout_falls_back_to_dataframe_summary(tmp_path: Path):
     assert "largest spending category" in result.response.lower()
 
 
+def test_response_llm_is_skipped_after_planner_timeout(tmp_path: Path):
+    pipeline = make_pipeline(tmp_path)
+    pipeline.settings.prefer_heuristic_planner = False
+    pipeline.settings.enable_response_llm = True
+    fake_llm = CountingTimeoutLLM()
+    attach_fake_llm(pipeline, fake_llm)
+
+    result = pipeline.run("usr_a1b2c3d4", "What did I spend the most on last month?")
+
+    assert result.error is None
+    assert GuardrailFlag.TIMEOUT in result.guardrail_flags
+    assert fake_llm.compose_calls == 0
+    assert result.data_summary["tools"][0]["name"] == "plot_category_breakdown"
+
+
+def test_known_prompt_uses_fast_heuristic_before_llm(tmp_path: Path):
+    pipeline = make_pipeline(tmp_path)
+    fake_llm = CountingPlanLLM()
+    attach_fake_llm(pipeline, fake_llm)
+
+    result = pipeline.run("usr_a1b2c3d4", "Show me my spending trend for the last three months")
+    tool = result.data_summary["tools"][0]
+
+    assert result.error is None
+    assert fake_llm.plan_calls == 0
+    assert GuardrailFlag.TIMEOUT not in result.guardrail_flags
+    assert tool["name"] == "plot_monthly_spending_trend"
+    assert tool["parameters"]["months"] == 3
+
+
 def test_llm_circuit_open_falls_back_to_dataframe_summary(tmp_path: Path):
     pipeline = make_pipeline(tmp_path)
+    pipeline.settings.prefer_heuristic_planner = False
     attach_fake_llm(pipeline, CircuitOpenLLM())
 
     result = pipeline.run("usr_a1b2c3d4", "Am I saving money?")
@@ -411,6 +472,25 @@ def test_llm_client_opens_circuit_after_failure_threshold():
         llm.plan([{"role": "user", "content": "plan again"}])
 
     assert fake_client.calls == first_request_calls
+
+
+def test_llm_client_limits_model_attempts_without_retry():
+    settings = Settings(
+        enable_llm=False,
+        tracing_enabled=False,
+        circuit_breaker_threshold=10,
+        openrouter_planner_models="model-a,model-b,model-c",
+        openrouter_response_models="model-a,model-b,model-c",
+        llm_model_attempt_limit=2,
+    )
+    llm = LLMClient(settings)
+    fake_client = FailingOpenRouterClient()
+    llm._client = fake_client
+
+    with pytest.raises(LLMUnavailableError):
+        llm.plan([{"role": "user", "content": "plan"}])
+
+    assert fake_client.calls == 2
 
 
 def test_prompt_injection_after_length_limit_is_still_blocked(tmp_path: Path):
